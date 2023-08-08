@@ -11,9 +11,28 @@
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/gpio.h>
 #include <libopencm3/cm3/systick.h>
+// IVT is a data structure; the last of which is NVIC for peripheral interrupts
+#include <libopencm3/cm3/vector.h>
 
 #define LED_PORT (GPIOA)
 #define LED_PIN (GPIO5)
+
+// interrupt handlers:
+// void null_handler(void) {}
+// void blocking_handler(void) { while(1){} } 
+
+volatile u64 ticks = 0;
+void
+systick_handler(void)
+{
+  // non-atomic as will require 2 instructions
+  ticks++;
+}
+
+static u64 get_ticks(void)
+{
+  return ticks;
+}
 
 // referred to as 'advanced' bus as highly configurable (speed and transfer) and connects different peripherals 
 
@@ -56,6 +75,8 @@ gpio_setup(void)
 // memory mapped address hierarchy typically 'bus + peripheral + register' 
 
 // 4.2billion enough
+// 4 to roughly account for the for-loop cmp and add
+// delay_cycles(84000000 / 4);
 static void
 delay_cycles(u32 cycles)
 {
@@ -78,17 +99,27 @@ delay_cycles(u32 cycles)
 // also cortex-m4 programming manual
 
 
+// pwm is a 'rectangle' wave. 
+// duty cycle is how long is it high for
+// TODO (duty cycle independent of frequency? so 50% same at different frequencies?):https://www.youtube.com/watch?v=rBQVfCUuhfs 
+
 int
 main(void)
 {
   rcc_setup();
   gpio_setup();
+  systick_setup();
 
   while (1)
   {
-    gpio_toggle(LED_PORT, LED_PIN);  
-    // 4 to roughly account for the for-loop cmp and add
-    delay_cycles(84000000 / 4);
+    u64 start_time = get_ticks();
+
+    // blink led at 1Hz
+    if (get_ticks() - start_time >= 1000)
+    {
+      gpio_toggle(LED_PORT, LED_PIN);  
+      start_time = get_ticks();
+    }
   }
 
   return 0;
