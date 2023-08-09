@@ -10,6 +10,7 @@
 
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/gpio.h>
+#include <libopencm3/stm32/timer.h>
 #include <libopencm3/cm3/systick.h>
 // IVT is a data structure; the last of which is NVIC for peripheral interrupts
 #include <libopencm3/cm3/vector.h>
@@ -32,6 +33,34 @@ systick_handler(void)
 static u64 get_ticks(void)
 {
   return ticks;
+}
+
+// assembly: .if 0 .endif
+
+void timer_setup(void)
+{
+  rcc_periph_clock_enable(RCC_TIM2);
+
+  timer_set_mode(TIM2, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
+
+  // channel specific
+  timer_set_oc_mode(TIM2, TIM_OC1, TIM_OCM_PWM1);
+
+  timer_enable_counter(TIM2);
+  timer_enable_oc_output(TIM2, TIM_OC1);
+
+  // subtract 1 as cannot have 0, but don't want to waste the 0 value
+  // freq = system_freq / ((prescaler - 1) * (arr - 1))
+  // want, 1KHz, with 1000 possible places, i.e. resolution
+  timer_set_prescaler(TIM2, 84 - 1);
+  timer_set_period(TIM2, 1000 - 1);
+}
+
+void set_duty_cycle(f32 duty_cycle)
+{
+  // ccr = arr * (duty-cycle / 100)
+  f32 raw_value = ARR_VALUE * (duty_cycle / 100);
+  timer_set_oc_value(TIM2, TIM_OC1, (u32)raw_value);
 }
 
 // referred to as 'advanced' bus as highly configurable (speed and transfer) and connects different peripherals 
@@ -68,7 +97,8 @@ gpio_setup(void)
   rcc_periph_clock_enable(RCC_GPIOA);
 
   // the ports (ORing pins) provide atomicity, e.g. can read/write to 16pins simultaneously
-  gpio_mode_setup(LED_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, LED_PIN);
+  gpio_mode_setup(LED_PORT, GPIO_MODE_AF, GPIO_PUPD_NONE, LED_PIN);
+  gpio_set_af(LED_PORT, GPIO_AF1, LED_PIN);
 }
 
 // #define MMIO_32(addr) (*(volatile u32 *)addr)
@@ -99,9 +129,18 @@ delay_cycles(u32 cycles)
 // also cortex-m4 programming manual
 
 
-// pwm is a 'rectangle' wave. 
+// counter-reg, auto-reload (freq.), compare-reg (duty.)
+// pwm is a 'rectangle' wave (internally is a saw-tooth, from comparator turns to rectangle)
 // duty cycle is how long is it high for
-// TODO (duty cycle independent of frequency? so 50% same at different frequencies?):https://www.youtube.com/watch?v=rBQVfCUuhfs 
+// duty cycle independent of frequency
+// signal can interface with motors that extract freq. and duty. information
+// also used to drive a MOSFETs (electronic switch to activate a circuit of higher voltage/load?)
+// in this case, could have multiple MOSFETs, driving each at different pulses? motor H-bridge?
+// PWM dead-timing to ensure circuit settles?
+// PWM also to create music (may require amplifier for speaker). RC circuit used for say a low-pass filter that could perform waveform shaping, e.g. square to sine
+// timers flexible (channels, peripheral control, interrupts, inputs, outputs, etc.)
+//
+// TODO: links for MOSFET?
 
 int
 main(void)
@@ -109,15 +148,22 @@ main(void)
   rcc_setup();
   gpio_setup();
   systick_setup();
+  timer_setup();
 
   while (1)
   {
     u64 start_time = get_ticks();
+    f32 duty_cycle = 0.0f;
+
+    timer_set_duty_cycle(duty_cycle);
 
     // blink led at 1Hz
-    if (get_ticks() - start_time >= 1000)
+    if (get_ticks() - start_time >= 10)
     {
-      gpio_toggle(LED_PORT, LED_PIN);  
+      duty_cycle += 1.0f;
+      if (duty_cycle > 100.0f) duty_cycle = 0.0f;
+      timer_set_duty_cycle(duty_cycle);
+
       start_time = get_ticks();
     }
   }
